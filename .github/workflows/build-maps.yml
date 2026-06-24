@@ -1,0 +1,123 @@
+name: Build maps
+
+# Runs daily (after Geofabrik's usual update window) and on manual dispatch.
+# For each region it checks Geofabrik's .pbf md5; only rebuilds regions whose
+# source data changed since the last published build (md5 stored in manifest.json).
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set
+        run: |
+          matrix=$(cat regions/*/region.json | jq -sc '{include: .}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "$matrix"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Geofabrik md5 vs last build
+        id: check
+        run: |
+          GMD5=$(curl -sL "https://download.geofabrik.de/${{ matrix.geofabrik }}-latest.osm.pbf.md5" | awk '{print $1}')
+          OLD=""
+          if [ -f manifest.json ]; then
+            OLD=$(jq -r --arg c "${{ matrix.code }}" '.regions[]? | select(.code==$c) | .md5 // ""' manifest.json)
+          fi
+          echo "geofabrik md5: $GMD5 / stored: $OLD"
+          echo "gmd5=$GMD5" >> "$GITHUB_OUTPUT"
+          if [ -n "$GMD5" ] && [ "$GMD5" = "$OLD" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python + pyosmium
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          python3 -m pip install --quiet osmium
+
+      - name: Build datasets
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          bash scripts/build-region.sh "${{ matrix.code }}" "${{ matrix.geofabrik }}" "out/${{ matrix.code }}"
+
+      - name: Publish release assets
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CODE="${{ matrix.code }}"
+          gh release create "$CODE" --title "$CODE maps" --notes "Auto-built from Geofabrik. OSM data © OpenStreetMap contributors (ODbL)." 2>/dev/null || true
+          gh release upload "$CODE" \
+            "out/$CODE/$CODE.tar" \
+            "out/$CODE/$CODE.mbtiles" \
+            "out/$CODE/$CODE.search.sqlite" \
+            --clobber
+
+      - name: Emit manifest entry
+        run: |
+          CODE="${{ matrix.code }}"
+          mkdir -p entries
+          if [ "${{ steps.check.outputs.changed }}" = "true" ]; then
+            BASE="https://github.com/${{ github.repository }}/releases/download/$CODE"
+            sz() { echo $(( $(stat -c%s "$1") / 1048576 )); }
+            jq -n \
+              --arg name "${{ matrix.name }}" --arg code "$CODE" \
+              --arg md5 "${{ steps.check.outputs.gmd5 }}" \
+              --arg updated "$(date -u +%F)" \
+              --arg burl "$BASE/$CODE.mbtiles" --argjson bsz "$(sz out/$CODE/$CODE.mbtiles)" \
+              --arg rurl "$BASE/$CODE.tar"      --argjson rsz "$(sz out/$CODE/$CODE.tar)" \
+              --arg surl "$BASE/$CODE.search.sqlite" --argjson ssz "$(sz out/$CODE/$CODE.search.sqlite)" \
+              '{name:$name, code:$code, md5:$md5, updated:$updated,
+                basemap:{url:$burl,size_mb:$bsz}, routing:{url:$rurl,size_mb:$rsz}, search:{url:$surl,size_mb:$ssz}}' \
+              > "entries/$CODE.json"
+          else
+            # unchanged → keep the existing manifest entry
+            jq --arg c "$CODE" '.regions[] | select(.code==$c)' manifest.json > "entries/$CODE.json"
+          fi
+          cat "entries/$CODE.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entry-${{ matrix.code }}
+          path: entries/${{ matrix.code }}.json
+
+  aggregate:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: entry-*
+          merge-multiple: true
+      - name: Assemble manifest.json
+        run: |
+          jq -s '{regions: (. | sort_by(.name))}' artifacts/*.json > manifest.json
+          cat manifest.json
+      - name: Commit manifest
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update manifest [skip ci]" || { echo "no changes"; exit 0; }
+          git push
