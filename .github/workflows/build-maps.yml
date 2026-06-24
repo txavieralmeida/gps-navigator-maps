@@ -56,6 +56,11 @@ jobs:
 
       - name: Build datasets
         if: steps.check.outputs.changed == 'true'
+        env:
+          # Pin Valhalla to the version the on-device library (valhalla-mobile 0.1.0)
+          # reads. NEVER use :latest — it drifted to 3.7.0 and produced tiles the
+          # 3.5.0 reader can't parse ("Action not supported tile" at route time).
+          VALHALLA_VERSION: "3.5.0"
         run: |
           bash scripts/build-region.sh "${{ matrix.code }}" "${{ matrix.geofabrik }}" "out/${{ matrix.code }}"
 
