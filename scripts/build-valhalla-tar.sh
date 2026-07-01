@@ -30,6 +30,11 @@ docker run --rm -v "${WORK}:/data" "$IMAGE" bash -c "
     valhalla_build_tiles --config /data/valhalla.json /data/data.osm.pbf
     # In 3.5.0, build_extract (no -e) packs mjolnir.tile_dir -> mjolnir.tile_extract.
     valhalla_build_extract --config /data/valhalla.json -O
+    # The container runs as root, so everything written into the bind-mounted
+    # /data is owned by root. Hand it back to the host user, otherwise the
+    # cleanup 'rm -rf' below fails with 'Permission denied' and (under set -e)
+    # kills the whole step even though the tar was built fine.
+    chown -R $(id -u):$(id -g) /data
 "
 
 cp "${WORK}/valhalla_tiles.tar" "$OUT"
