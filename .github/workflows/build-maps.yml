@@ -1,11 +1,11 @@
 name: Build maps
 
-# Runs daily (after Geofabrik's usual update window) and on manual dispatch.
+# Runs weekly (after Geofabrik's usual update window) and on manual dispatch.
 # For each region it checks Geofabrik's .pbf md5; only rebuilds regions whose
 # source data changed since the last published build (md5 stored in manifest.json).
 on:
   schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC daily
+    - cron: "0 6 * * 1"   # 06:00 UTC every Monday
   workflow_dispatch:
 
 permissions:
