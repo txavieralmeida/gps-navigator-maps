@@ -3,8 +3,8 @@
     {
       "name": "Portugal",
       "code": "portugal",
-      "md5": "5bb9b9f84aa829475e04d4af47335502",
-      "updated": "2026-10-19",
+      "md5": "4a6e5a30e87a4acb04a5e68f26b5ce04",
+      "updated": "2026-10-26",
       "basemap": {
         "url": "https://github.com/txavieralmeida/gps-navigator-maps/releases/download/portugal/portugal.mbtiles",
         "size_mb": 578
